@@ -1,0 +1,16 @@
+/**:
+  ros__parameters:
+    # 同机在线跟随使用原始 Image，避免 JPEG/PNG 编码后再解码。
+    color_topic: /camera/color/image_raw
+    depth_topic: /camera/depth/image_raw
+    color_transport: raw
+    depth_transport: raw
+    service_name: ~/get_image
+    # 跟随只使用独立最新缓存，不保留历史图像。
+    queue_length: 0
+    save_every_n_frames: 1
+    max_image_age_sec: 5.0
+    sync_tolerance_sec: 0.04
+    sync_queue_size: 2
+    qos_depth: 1
+    purge_period_sec: 1.0

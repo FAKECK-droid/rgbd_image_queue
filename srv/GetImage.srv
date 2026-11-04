@@ -1,0 +1,34 @@
+# 单个服务，通过 operation 选择数据源和返回内容。
+# LATEST_* 为独立的实时缓存，不受历史采样间隔影响。
+uint8 LATEST_COLOR=0
+uint8 LATEST_DEPTH=1
+uint8 LATEST_PAIR=2
+# QUEUE_* 为历史队列最新一对，受采样间隔和寿命影响。
+uint8 QUEUE_COLOR=3
+uint8 QUEUE_DEPTH=4
+uint8 QUEUE_PAIR=5
+uint8 STATUS=6
+# 仅清除历史；保留独立最新图像对。
+uint8 CLEAR_QUEUE=7
+uint8 operation
+---
+bool success
+string message
+bool has_color
+bool has_depth
+sensor_msgs/Image color
+sensor_msgs/Image depth
+uint64 pair_id
+builtin_interfaces/Time color_stamp
+builtin_interfaces/Time depth_stamp
+float64 stamp_delta_sec
+float64 image_age_sec
+bool exceeded_max_age
+uint32 queue_size
+bool latest_available
+float64 latest_age_sec
+uint64 paired_count
+uint64 enqueued_count
+uint64 expired_count
+uint64 capacity_evicted_count
+uint64 retained_image_bytes

@@ -1,0 +1,24 @@
+<!-- /goal_update already contains the standoff goal; do not truncate it again.
+     Replan at 1 Hz and pause for 1 second after reaching the navigation goal. -->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <PipelineSequence name="NavigateWithReplanning">
+      <RateController hz="2.0">
+        <Sequence>
+          <GoalUpdater input_goal="{goal}" output_goal="{updated_goal}">
+            <ComputePathToPose goal="{updated_goal}" path="{path}" planner_id="GridBased"/>
+          </GoalUpdater>
+        </Sequence>
+      </RateController>
+      <KeepRunningUntilFailure>
+        <Sequence name="FollowAndPauseAfterArrival">
+          <FollowPath path="{path}" controller_id="FollowPath" goal_checker_id="general_goal_checker"/>
+          <!-- Only after FollowPath succeeds; no delay while the controller is running. -->
+          <Delay delay_msec="300">
+            <AlwaysSuccess/>
+          </Delay>
+        </Sequence>
+      </KeepRunningUntilFailure>
+    </PipelineSequence>
+  </BehaviorTree>
+</root>
