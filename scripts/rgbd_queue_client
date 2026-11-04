@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""取图服务客户端：显示摘要，不把数 MB 图像数组打印到终端。"""
+import argparse
+import json
+import rclpy
+from rgbd_image_queue.srv import GetImage
+
+OPERATIONS = {
+    "latest_color": GetImage.Request.LATEST_COLOR,
+    "latest_depth": GetImage.Request.LATEST_DEPTH,
+    "latest_pair": GetImage.Request.LATEST_PAIR,
+    "queue_color": GetImage.Request.QUEUE_COLOR,
+    "queue_depth": GetImage.Request.QUEUE_DEPTH,
+    "queue_pair": GetImage.Request.QUEUE_PAIR,
+    "queue_color_at_age": GetImage.Request.QUEUE_COLOR_AT_AGE,
+    "queue_depth_at_age": GetImage.Request.QUEUE_DEPTH_AT_AGE,
+    "queue_pair_at_age": GetImage.Request.QUEUE_PAIR_AT_AGE,
+    "status": GetImage.Request.STATUS,
+    "clear_queue": GetImage.Request.CLEAR_QUEUE,
+}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("operation", choices=OPERATIONS)
+    parser.add_argument("detail", type=int, nargs="?", default=0,
+                        help="QUEUE_*：从新到旧索引；*_AT_AGE：距当前毫秒数；其他操作忽略")
+    parser.add_argument("--service", default="/rgbd_image_queue/get_image")
+    args = parser.parse_args()
+    rclpy.init()
+    node = rclpy.create_node("rgbd_queue_client")
+    client = node.create_client(GetImage, args.service)
+    print("Waiting for " + args.service + " ...", flush=True)
+    client.wait_for_service()
+    request = GetImage.Request()
+    request.operation = OPERATIONS[args.operation]
+    request.detail = args.detail
+    future = client.call_async(request)
+    rclpy.spin_until_future_complete(node, future)
+    result = future.result()
+    fields = [
+        "success", "message", "pair_id", "stamp_delta_sec", "image_age_sec",
+        "exceeded_max_age", "queue_index", "age_error_sec", "queue_size", "latest_available", "latest_age_sec",
+        "paired_count", "enqueued_count", "expired_count", "capacity_evicted_count",
+        "retained_image_bytes",
+    ]
+    summary = {key: getattr(result, key) for key in fields}
+    for name in ("color", "depth"):
+        if getattr(result, "has_" + name):
+            image = getattr(result, name)
+            summary[name] = {
+                "format": image.format,
+                "frame_id": image.header.frame_id, "bytes": len(image.data),
+                "stamp": [image.header.stamp.sec, image.header.stamp.nanosec],
+            }
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    node.destroy_node()
+    rclpy.shutdown()
+    return 0 if result.success else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

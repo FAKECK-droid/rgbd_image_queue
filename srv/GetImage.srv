@@ -1,0 +1,42 @@
+# LATEST_*：队列外最新配对，detail 忽略。
+uint8 LATEST_COLOR=0
+uint8 LATEST_DEPTH=1
+uint8 LATEST_PAIR=2
+# QUEUE_*：detail 为历史索引，0 最新，1 次新，以此类推。
+uint8 QUEUE_COLOR=3
+uint8 QUEUE_DEPTH=4
+uint8 QUEUE_PAIR=5
+# 不返回图像，detail 忽略。
+uint8 STATUS=6
+uint8 CLEAR_QUEUE=7
+# detail 为距服务处理时刻的毫秒数，取历史中年龄最近的一对；同距选较新者。
+uint8 QUEUE_COLOR_AT_AGE=8
+uint8 QUEUE_DEPTH_AT_AGE=9
+uint8 QUEUE_PAIR_AT_AGE=10
+uint8 operation
+uint32 detail
+---
+bool success
+string message
+bool has_color
+bool has_depth
+sensor_msgs/CompressedImage color
+sensor_msgs/CompressedImage depth
+uint64 pair_id
+builtin_interfaces/Time color_stamp
+builtin_interfaces/Time depth_stamp
+float64 stamp_delta_sec
+float64 image_age_sec
+bool exceeded_max_age
+# 历史查询实际命中的索引；独立最新、状态或无数据时为 -1。
+int64 queue_index
+# 仅 AT_AGE 有意义：实际年龄减请求年龄，正数表示返回帧更旧。
+float64 age_error_sec
+uint32 queue_size
+bool latest_available
+float64 latest_age_sec
+uint64 paired_count
+uint64 enqueued_count
+uint64 expired_count
+uint64 capacity_evicted_count
+uint64 retained_image_bytes
