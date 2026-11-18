@@ -7,7 +7,10 @@ find_package(sensor_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
-rosidl_generate_interfaces(${PROJECT_NAME} "srv/GetImage.srv"
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/ImagePair.msg"
+  "srv/GetImage.srv"
+  "srv/GetImageBatch.srv"
   DEPENDENCIES sensor_msgs builtin_interfaces)
 rosidl_get_typesupport_target(cpp_typesupport ${PROJECT_NAME} rosidl_typesupport_cpp)
 add_executable(rgbd_image_queue_node src/queue_node.cpp)

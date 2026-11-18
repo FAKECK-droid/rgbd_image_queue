@@ -1,0 +1,16 @@
+# stream_id 留空时从当前历史尾部建立游标，只取最新对。
+string stream_id
+uint64 after_seq
+# 总数包括最新对。0 使用默认 8，最大 32。
+uint32 max_pairs
+---
+string stream_id
+bool cursor_reset
+bool history_enabled
+uint64 snapshot_seq
+uint64 next_seq
+uint64 missing_count
+bool has_more
+# -1 表示没有最新对；否则索引指向 pairs 中的最新对（最多传一次）。
+int32 latest_index
+rgbd_image_queue/ImagePair[] pairs

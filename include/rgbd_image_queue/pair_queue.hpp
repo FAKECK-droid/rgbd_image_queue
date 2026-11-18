@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <vector>
 #include <sensor_msgs/msg/compressed_image.hpp>
 
 namespace rgbd_image_queue
@@ -38,6 +39,7 @@ inline int64_t stamp_ns(const builtin_interfaces::msg::Time & stamp)
 struct Pair
 {
   uint64_t id;
+  uint64_t history_seq;  ///< 入历史队列时递增；未入队为零。
   CompressedImage::ConstSharedPtr color;
   CompressedImage::ConstSharedPtr depth;
   int64_t received_steady_ns;
@@ -59,6 +61,19 @@ struct View
   uint64_t expired_count{0};
   uint64_t capacity_evicted_count{0};
   uint64_t retained_image_bytes{0};
+};
+
+struct Batch
+{
+  std::vector<std::shared_ptr<const Pair>> pairs;
+  uint64_t snapshot_seq{0};
+  uint64_t next_seq{0};
+  uint64_t missing_count{0};
+  bool cursor_reset{false};
+  bool history_enabled{false};
+  bool has_more{false};
+  int32_t latest_index{-1};
+  double max_image_age_sec{0.0};
 };
 
 enum class Selection {None, Latest, Queue, QueueAtAge, ClearQueue};
@@ -89,12 +104,13 @@ public:
   {
     std::lock_guard<std::mutex> lock(mutex_);
     prune_locked(ros_ns, steady_ns);
+    const bool enqueue = config_.queue_length > 0 && sample_phase_ == 0;
+    const auto seq = enqueue ? ++enqueued_count_ : 0;
     latest_ = std::make_shared<Pair>(
-      Pair{++paired_count_, std::move(color), std::move(depth), steady_ns});
-    if (config_.queue_length > 0 && sample_phase_ == 0) {
+      Pair{++paired_count_, seq, std::move(color), std::move(depth), steady_ns});
+    if (enqueue) {
       history_.push_back(latest_);
       history_bytes_ += latest_->bytes();
-      ++enqueued_count_;
     }
     sample_phase_ = (sample_phase_ + 1) % config_.save_every_n_frames;
     prune_locked(ros_ns, steady_ns);
@@ -147,13 +163,49 @@ public:
     return view;
   }
 
+  /** @brief 读取共享引用快照；预留最新对的位置，游标仅跨过已读或已明确丢失的历史。 */
+  Batch read_batch(uint64_t after_seq, uint32_t max_pairs, bool start_at_head,
+                   int64_t ros_ns, int64_t steady_ns)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    prune_locked(ros_ns, steady_ns);
+    Batch batch;
+    batch.history_enabled = config_.queue_length > 0;
+    batch.max_image_age_sec = config_.max_image_age_sec;
+    batch.snapshot_seq = enqueued_count_;
+    batch.cursor_reset = after_seq > batch.snapshot_seq;
+    batch.next_seq = start_at_head || batch.cursor_reset ? batch.snapshot_seq : after_seq;
+    const auto removed_through = history_.empty() ? enqueued_count_ : history_.front()->history_seq - 1;
+    if (removed_through > batch.next_seq) {
+      batch.missing_count = removed_through - batch.next_seq;
+      batch.next_seq = removed_through;
+    }
+
+    const std::size_t limit = max_pairs == 0 ? 8 : std::min(max_pairs, uint32_t{32});
+    const auto unread = batch.snapshot_seq - batch.next_seq;
+    const bool latest_fits_in_history = unread > 0 && unread <= limit && history_.back() == latest_;
+    const auto history_limit = limit - (latest_ && !latest_fits_in_history ? 1 : 0);
+    const auto count = std::min<uint64_t>(unread, history_limit);
+    const auto first = history_.size() - unread;
+    batch.pairs.reserve(static_cast<std::size_t>(count) + (latest_ ? 1 : 0));
+    for (uint64_t i = 0; i < count; ++i) {
+      batch.pairs.push_back(history_[first + i]);
+    }
+    batch.next_seq += count;
+    batch.has_more = batch.next_seq < batch.snapshot_seq;
+    if (latest_) {
+      if (batch.pairs.empty() || batch.pairs.back() != latest_) {batch.pairs.push_back(latest_);}
+      batch.latest_index = static_cast<int32_t>(batch.pairs.size() - 1);
+    }
+    return batch;
+  }
+
   void prune(int64_t ros_ns, int64_t steady_ns)
   {
     std::lock_guard<std::mutex> lock(mutex_);
     prune_locked(ros_ns, steady_ns);
   }
 
-private:
   static double age(const Pair & pair, int64_t ros_ns, int64_t steady_ns)
   {
     const auto captured = std::min(stamp_ns(pair.color->header.stamp),
@@ -162,6 +214,7 @@ private:
                      (steady_ns - pair.received_steady_ns) / 1e9});
   }
 
+private:
   void pop_front()
   {
     history_bytes_ -= history_.front()->bytes();

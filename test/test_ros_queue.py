@@ -18,7 +18,7 @@ import rclpy
 from rclpy.parameter import Parameter
 from rcl_interfaces.srv import SetParametersAtomically, GetParameters
 from sensor_msgs.msg import CompressedImage
-from rgbd_image_queue.srv import GetImage
+from rgbd_image_queue.srv import GetImage, GetImageBatch
 
 
 class QueueRosTest(unittest.TestCase):
@@ -29,6 +29,7 @@ class QueueRosTest(unittest.TestCase):
         cls.color = cls.node.create_publisher(CompressedImage, "/queue_test/color", 4)
         cls.depth = cls.node.create_publisher(CompressedImage, "/queue_test/depth", 4)
         cls.client = cls.node.create_client(GetImage, "/queue_under_test/get_image")
+        cls.batch = cls.node.create_client(GetImageBatch, "/queue_under_test/get_image_batch")
         cls.params = cls.node.create_client(SetParametersAtomically,
                                             "/queue_under_test/set_parameters_atomically")
         cls.getter = cls.node.create_client(GetParameters, "/queue_under_test/get_parameters")
@@ -100,6 +101,50 @@ class QueueRosTest(unittest.TestCase):
             self.assertLess(time.monotonic(), deadline,
                             "paired_count=" + str(self.call(GetImage.Request.STATUS).paired_count))
             rclpy.spin_once(self.node, timeout_sec=.02)
+
+    def test_batch_preserves_unread_history_and_deduplicates_latest(self):
+        self.assertTrue(self.batch.wait_for_service(timeout_sec=5))
+
+        def get(stream_id="", after_seq=0, max_pairs=2):
+            future = self.batch.call_async(GetImageBatch.Request(
+                stream_id=stream_id, after_seq=after_seq, max_pairs=max_pairs))
+            rclpy.spin_until_future_complete(self.node, future, timeout_sec=4)
+            self.assertTrue(future.done(), "batch timeout")
+            return future.result()
+
+        start = get()
+        self.assertEqual(start.latest_index, -1)
+        self.assertTrue(self.configure(save_every_n_frames=1).successful)
+        self.publish_pairs(7)
+        first = get(start.stream_id, start.next_seq)
+        self.assertGreater(first.missing_count, 0)
+        self.assertTrue(first.has_more)
+        self.assertEqual(first.latest_index, 1)
+        self.assertEqual(first.pairs[0].history_seq, first.next_seq)
+        self.assertEqual(first.pairs[1].history_seq, first.snapshot_seq)
+        self.assertEqual(first.pairs[1].depth.data[0], first.pairs[1].color.data[0])
+
+        rest = get(first.stream_id, first.next_seq)
+        self.assertEqual(rest.missing_count, 0)
+        self.assertFalse(rest.has_more)
+        self.assertEqual(len(rest.pairs), 2)
+        self.assertEqual(rest.pairs[0].history_seq, first.next_seq + 1)
+        self.assertEqual(rest.pairs[1].pair_id, first.pairs[1].pair_id)
+        self.assertEqual(rest.next_seq, first.snapshot_seq)
+
+        repeated = get(rest.stream_id, rest.next_seq)
+        self.assertEqual(len(repeated.pairs), 1)
+        self.assertEqual(repeated.latest_index, 0)
+        self.assertFalse(repeated.has_more)
+
+        self.call(GetImage.Request.CLEAR_QUEUE)
+        cleared = get(start.stream_id, first.next_seq)
+        self.assertEqual(cleared.missing_count, rest.next_seq - first.next_seq)
+        self.assertEqual(cleared.pairs[0].pair_id, rest.pairs[-1].pair_id)
+        reset = get("previous-queue", first.next_seq)
+        self.assertTrue(reset.cursor_reset)
+        self.assertEqual(reset.missing_count, 0)
+        self.assertEqual(reset.next_seq, rest.next_seq)
 
     def test_pair_service_payloads_sampling_and_latest(self):
         self.assertFalse(self.call(GetImage.Request.QUEUE_PAIR).success)

@@ -1,6 +1,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -12,10 +13,12 @@
 #include <rclcpp/rclcpp.hpp>
 #include "rgbd_image_queue/pair_queue.hpp"
 #include "rgbd_image_queue/srv/get_image.hpp"
+#include "rgbd_image_queue/srv/get_image_batch.hpp"
 
 namespace rgbd_image_queue
 {
 using GetImage = srv::GetImage;
+using GetImageBatch = srv::GetImageBatch;
 using Policy = message_filters::sync_policies::ApproximateTime<CompressedImage, CompressedImage>;
 using Synchronizer = message_filters::Synchronizer<Policy>;
 
@@ -59,6 +62,14 @@ public:
     service_ = create_service<GetImage>(
       service_name,
       std::bind(&QueueNode::on_request, this, std::placeholders::_1, std::placeholders::_2),
+      rmw_qos_profile_services_default, service_group_);
+    std::random_device random;
+    stream_id_ = std::to_string(steady_ns()) + "-" + std::to_string(random());
+    const auto batch_name = fixed<std::string>(
+      "batch_service_name", std::string(service_->get_service_name()) + "_batch");
+    batch_service_ = create_service<GetImageBatch>(
+      batch_name,
+      std::bind(&QueueNode::on_batch, this, std::placeholders::_1, std::placeholders::_2),
       rmw_qos_profile_services_default, service_group_);
     purge_timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(purge_period)),
@@ -175,11 +186,43 @@ private:
     }
   }
 
+  void on_batch(
+    const GetImageBatch::Request::SharedPtr request, GetImageBatch::Response::SharedPtr response)
+  {
+    const auto ros_ns = now().nanoseconds();
+    const auto steady = steady_ns();
+    const bool new_stream = request->stream_id != stream_id_;
+    auto batch = queue_->read_batch(
+      request->after_seq, request->max_pairs, new_stream, ros_ns, steady);
+    response->stream_id = stream_id_;
+    response->cursor_reset = !request->stream_id.empty() && (new_stream || batch.cursor_reset);
+    response->history_enabled = batch.history_enabled;
+    response->snapshot_seq = batch.snapshot_seq;
+    response->next_seq = batch.next_seq;
+    response->missing_count = batch.missing_count;
+    response->has_more = batch.has_more;
+    response->latest_index = batch.latest_index;
+    // 锁外拷贝压缩图，取图不会阻塞相机配对。
+    response->pairs.reserve(batch.pairs.size());
+    for (const auto & pair : batch.pairs) {
+      auto & output = response->pairs.emplace_back();
+      output.pair_id = pair->id;
+      output.history_seq = pair->history_seq;
+      output.image_age_sec = PairQueue::age(*pair, ros_ns, steady);
+      output.exceeded_max_age = batch.max_image_age_sec > 0 &&
+        output.image_age_sec > batch.max_image_age_sec;
+      output.color = *pair->color;
+      output.depth = *pair->depth;
+    }
+  }
+
   std::unique_ptr<PairQueue> queue_;
+  std::string stream_id_;
   rclcpp::CallbackGroup::SharedPtr image_group_, service_group_;
   message_filters::Subscriber<CompressedImage> color_sub_, depth_sub_;
   std::shared_ptr<Synchronizer> sync_;
   rclcpp::Service<GetImage>::SharedPtr service_;
+  rclcpp::Service<GetImageBatch>::SharedPtr batch_service_;
   rclcpp::TimerBase::SharedPtr purge_timer_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_;
 };

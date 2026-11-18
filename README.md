@@ -109,6 +109,17 @@ color_stamp、depth_stamp、stamp_delta_sec 来自同一配对。
 空缓存或索引越界时 success=false，不替换成其他帧。STATUS / CLEAR_QUEUE 可对空缓存成功。
 原操作 0–7 编号保留；原 QUEUE_* 请求 detail=0 时仍取历史最新。
 
+## 批量读取
+
+`/rgbd_image_queue/get_image_batch` 使用 `rgbd_image_queue/srv/GetImageBatch`。空 `stream_id` 从当前队尾开始，只返回最新对。后续将 `stream_id` 和 `next_seq` 作为下次请求的 `stream_id` 和 `after_seq`。
+
+`pairs` 按配对顺序排列，`latest_index` 指向同一快照的最新对，空队列为 -1。最新对可能未采样入历史，此时 `history_seq` 为 0。如果批次装不下未读历史，会留一个位置给最新对，`next_seq` 仍指向连续历史的读取位置。`has_more` 表示队列里还有未读历史，`missing_count` 统计本次发现已淘汰或清空的历史，`cursor_reset` 标记队列实例变化后重新建立起点。读取不会消耗队列内容。
+
+    ros2 run rgbd_image_queue rgbd_queue_client batch --max-pairs 8
+    ros2 run rgbd_image_queue rgbd_queue_client batch --stream-id <上次的stream_id> --after-seq <上次的next_seq>
+
+`batch_service_name` 可覆盖批量服务名，缺省为解析后的单图服务名加 `_batch`。要保留每个配对，设置 `save_every_n_frames=1`，再根据实际配对速率和调用间隔配置容量与保留时间。
+
 ## 调用示例
 
 摘要客户端避免打印图像字节，实际服务响应包含完整压缩载荷：

@@ -3,7 +3,7 @@
 import argparse
 import json
 import rclpy
-from rgbd_image_queue.srv import GetImage
+from rgbd_image_queue.srv import GetImage, GetImageBatch
 
 OPERATIONS = {
     "latest_color": GetImage.Request.LATEST_COLOR,
@@ -20,17 +20,50 @@ OPERATIONS = {
 }
 
 
+def batch(node, args):
+    client = node.create_client(GetImageBatch, args.service or "/rgbd_image_queue/get_image_batch")
+    client.wait_for_service()
+    request = GetImageBatch.Request(
+        stream_id=args.stream_id, after_seq=args.after_seq, max_pairs=args.max_pairs)
+    future = client.call_async(request)
+    rclpy.spin_until_future_complete(node, future)
+    result = future.result()
+    fields = ("stream_id", "cursor_reset", "history_enabled", "snapshot_seq",
+              "next_seq", "missing_count", "has_more", "latest_index")
+    summary = {field: getattr(result, field) for field in fields}
+    summary["pairs"] = [
+        {"pair_id": pair.pair_id, "history_seq": pair.history_seq,
+         "time": [pair.color.header.stamp.sec, pair.color.header.stamp.nanosec],
+         "image_age_sec": pair.image_age_sec, "exceeded_max_age": pair.exceeded_max_age,
+         "bytes": len(pair.color.data) + len(pair.depth.data)}
+        for pair in result.pairs]
+    summary["count"] = len(summary["pairs"])
+    summary["bytes"] = sum(pair["bytes"] for pair in summary["pairs"])
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=OPERATIONS)
+    parser.add_argument("operation", choices=[*OPERATIONS, "batch"])
     parser.add_argument("detail", type=int, nargs="?", default=0,
                         help="QUEUE_*：从新到旧索引；*_AT_AGE：距当前毫秒数；其他操作忽略")
-    parser.add_argument("--service", default="/rgbd_image_queue/get_image")
+    parser.add_argument("--service")
+    parser.add_argument("--stream-id", default="", help="batch：上次返回的 stream_id")
+    parser.add_argument("--after-seq", type=int, default=0, help="batch：上次返回的 next_seq")
+    parser.add_argument("--max-pairs", type=int, default=8, help="batch：包含最新对的总数上限")
     args = parser.parse_args()
     rclpy.init()
     node = rclpy.create_node("rgbd_queue_client")
-    client = node.create_client(GetImage, args.service)
-    print("Waiting for " + args.service + " ...", flush=True)
+    if args.operation == "batch":
+        try:
+            return batch(node, args)
+        finally:
+            node.destroy_node()
+            rclpy.shutdown()
+    service = args.service or "/rgbd_image_queue/get_image"
+    client = node.create_client(GetImage, service)
+    print("Waiting for " + service + " ...", flush=True)
     client.wait_for_service()
     request = GetImage.Request()
     request.operation = OPERATIONS[args.operation]
