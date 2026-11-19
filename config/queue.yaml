@@ -6,7 +6,7 @@
     service_name: ~/get_image
     # 这三项支持动态修改；0 长度关闭历史；0 寿命关闭按时间淘汰。
     queue_length: 10
-    save_every_n_frames: 10
+    save_every_n_frames: 15
     max_image_age_sec: 10.0
     # 以下参数通过配置后重启修改；RGB-D 匹配一次后不重复使用任一帧。
     sync_tolerance_sec: 0.04
